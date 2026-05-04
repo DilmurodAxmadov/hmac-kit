@@ -1,5 +1,10 @@
 # @daxmadov/hmac-kit
 
+[![npm version](https://img.shields.io/npm/v/@daxmadov/hmac-kit.svg)](https://www.npmjs.com/package/@daxmadov/hmac-kit)
+[![npm downloads](https://img.shields.io/npm/dm/@daxmadov/hmac-kit.svg)](https://www.npmjs.com/package/@daxmadov/hmac-kit)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js Version](https://img.shields.io/node/v/@daxmadov/hmac-kit.svg)](https://nodejs.org)
+
 Framework-agnostic HMAC-SHA256 request signing for server-to-server
 authentication. Includes a stateless client signer, a server-side verifier
 with replay protection, pluggable nonce storage (memory / Redis), and
