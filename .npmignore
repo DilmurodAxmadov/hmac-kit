@@ -1,0 +1,13 @@
+src
+tests
+examples
+.github
+.vscode
+.idea
+coverage
+*.tsbuildinfo
+tsup.config.ts
+vitest.config.ts
+tsconfig.json
+.eslintrc.cjs
+.prettierrc
