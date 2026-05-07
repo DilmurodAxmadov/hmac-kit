@@ -34,6 +34,14 @@ describe('hashBody', () => {
     const h = hashBody('x');
     expect(h).toMatch(/^[0-9a-f]{64}$/);
   });
+
+  it('returns 128-char hex for sha512', () => {
+    expect(hashBody('x', 'sha512')).toMatch(/^[0-9a-f]{128}$/);
+  });
+
+  it('produces different hashes for sha256 vs sha512', () => {
+    expect(hashBody('x', 'sha256')).not.toEqual(hashBody('x', 'sha512'));
+  });
 });
 
 describe('buildStringToSign', () => {

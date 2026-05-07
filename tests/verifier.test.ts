@@ -256,6 +256,37 @@ describe('SignatureVerifier rejection paths', () => {
   });
 });
 
+describe('SignatureVerifier — sha512 algorithm', () => {
+  it('accepts a sha512-signed request', async () => {
+    const store = new MemoryNonceStore({ sweepIntervalMs: 0 });
+    const verifier = new SignatureVerifier({
+      getSecret: async id => (id === CLIENT_ID ? SECRET : null),
+      nonceStore: store,
+      signatureAlgorithm: 'sha512',
+    });
+    const signer = new SignClient({ clientId: CLIENT_ID, secret: SECRET, signatureAlgorithm: 'sha512' });
+    const body = '{"amount":50}';
+    const { headerValue } = signer.sign({ method: 'POST', path: '/pay', body });
+    const result = await verifier.verify({ authHeader: headerValue, method: 'POST', path: '/pay', rawBody: body });
+    expect(result.clientId).toBe(CLIENT_ID);
+    store.close();
+  });
+
+  it('rejects when client uses sha512 but server expects sha256', async () => {
+    const store = new MemoryNonceStore({ sweepIntervalMs: 0 });
+    const verifier = new SignatureVerifier({
+      getSecret: async id => (id === CLIENT_ID ? SECRET : null),
+      nonceStore: store,
+    });
+    const signer = new SignClient({ clientId: CLIENT_ID, secret: SECRET, signatureAlgorithm: 'sha512' });
+    const { headerValue } = signer.sign({ method: 'GET', path: '/' });
+    await expect(
+      verifier.verify({ authHeader: headerValue, method: 'GET', path: '/' }),
+    ).rejects.toBeInstanceOf(InvalidSignatureError);
+    store.close();
+  });
+});
+
 describe('SignatureVerifier — header normalization', () => {
   let store: MemoryNonceStore;
   let verifier: SignatureVerifier;

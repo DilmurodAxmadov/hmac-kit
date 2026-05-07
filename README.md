@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/node/v/@daxmadov/hmac-kit.svg)](https://nodejs.org)
 
-Framework-agnostic HMAC-SHA256 request signing for server-to-server
+Framework-agnostic HMAC-SHA256/SHA-512 request signing for server-to-server
 authentication. Includes a stateless client signer, a server-side verifier
 with replay protection, pluggable nonce storage (memory / Redis), and
 adapters for Express, Fastify, and NestJS.
@@ -13,6 +13,9 @@ adapters for Express, Fastify, and NestJS.
 - Constant-time signature comparison
 - Replay protection via per-client nonces
 - 5-minute timestamp window (configurable)
+- SHA-256 (default) or SHA-512 — opt-in per client/server pair
+- Built-in retry with exponential backoff (`SignedHttpClient`)
+- Edge Runtime support — Cloudflare Workers, Deno, Vercel Edge (`/edge`)
 - Zero hard runtime dependencies — peer deps are all optional
 - Dual ESM + CJS, full `.d.ts` types per subpath
 
@@ -74,6 +77,43 @@ const client = new SignedHttpClient({
 });
 
 const res = await client.post('/api/payments', { amount: 100 });
+```
+
+#### Retry on transient errors
+
+`SignedHttpClient` can retry automatically. Each retry re-signs with a
+fresh nonce and timestamp, so replay protection is never compromised.
+
+```ts
+const client = new SignedHttpClient({
+  baseUrl: 'https://api.example.com',
+  clientId: 'svc_a',
+  secret: process.env.API_SECRET!,
+  retry: {
+    attempts: 3,           // total attempts including the first (default: 1)
+    delayMs: 500,          // base delay in ms (default: 500)
+    backoff: 'exponential',// 'exponential' or 'fixed' (default: 'exponential')
+    statusCodes: [429, 500, 502, 503, 504], // which codes to retry
+  },
+});
+```
+
+#### SHA-512
+
+Pass `signatureAlgorithm: 'sha512'` to both client and server to use
+HMAC-SHA-512. Both sides must use the same algorithm.
+
+```ts
+const signer = new SignClient({
+  clientId: 'svc_a',
+  secret: process.env.API_SECRET!,
+  signatureAlgorithm: 'sha512',
+});
+
+const verifier = new SignatureVerifier({
+  getSecret: async (id) => db.getSecret(id),
+  signatureAlgorithm: 'sha512',
+});
 ```
 
 ### Server (raw)
@@ -194,6 +234,65 @@ export class PaymentsController {
 }
 ```
 
+## Edge Runtime
+
+Use the `/edge` subpath for environments that do not support `node:crypto`
+(Cloudflare Workers, Deno, Vercel Edge Functions, Bun).
+
+The Edge API is identical to the Node.js API except that `EdgeSignClient.sign()`
+is `async`.
+
+```ts
+import {
+  EdgeSignClient,
+  EdgeSignatureVerifier,
+  EdgeSignedHttpClient,
+  MemoryNonceStore,
+} from '@daxmadov/hmac-kit/edge';
+
+// Client
+const signer = new EdgeSignClient({
+  clientId: 'svc_a',
+  secret: process.env.API_SECRET!,
+});
+
+const { headerName, headerValue } = await signer.sign({
+  method: 'POST',
+  path: '/api/payments',
+  body: JSON.stringify({ amount: 100 }),
+});
+
+// Server (e.g. Cloudflare Worker)
+const verifier = new EdgeSignatureVerifier({
+  getSecret: async (id) => env.SECRETS[id] ?? null,
+  nonceStore: new MemoryNonceStore(),
+});
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    const rawBody = await request.text();
+
+    try {
+      const { clientId } = await verifier.verify({
+        authHeader: request.headers.get('x-signature'),
+        method: request.method,
+        path: url.pathname + url.search,
+        rawBody,
+      });
+      return Response.json({ ok: true, clientId });
+    } catch (err: any) {
+      return Response.json(err.toJSON(), { status: err.httpStatus ?? 500 });
+    }
+  },
+};
+```
+
+The `EdgeSignedHttpClient` has the same retry support as `SignedHttpClient`.
+
+> **Node.js**: You can also use the `/edge` export in Node.js 18+ — both
+> `node:crypto` and `globalThis.crypto` are available there.
+
 ## Raw body
 
 The verifier hashes the **exact bytes** the client signed. If your HTTP
@@ -217,10 +316,12 @@ The string-to-sign is the following five fields joined by `\n`:
 <path>\n
 <unix-seconds>\n
 <nonce-uuid-v4>\n
-<sha256-hex(body)>
+<sha256-hex(body)>   ← sha512-hex when signatureAlgorithm is 'sha512'
 ```
 
-Signature = `HMAC-SHA256(secret, stringToSign)`, hex-encoded.
+Signature = `HMAC-<algorithm>(secret, stringToSign)`, hex-encoded.
+Default algorithm is SHA-256; opt into SHA-512 via `signatureAlgorithm: 'sha512'`
+on both client and server.
 
 The auth fields are JSON-encoded, base64-encoded, and transmitted as a
 single `X-Signature` header. The server decodes, validates timestamp and

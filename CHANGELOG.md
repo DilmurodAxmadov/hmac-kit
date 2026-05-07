@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-05-07
+
+### Added
+
+- **SHA-512 support** — `signatureAlgorithm: 'sha512'` now works end-to-end.
+  Both body hashing and HMAC computation use the configured algorithm.
+  Pass the same `signatureAlgorithm` to `SignClient` / `SignedHttpClient` and
+  `SignatureVerifier` to activate. Default remains SHA-256.
+
+- **Auto-retry in `SignedHttpClient`** — new `retry` config option.
+  - `attempts` — total attempts including the first (default: `1`, i.e. no retry).
+  - `delayMs` — base delay between retries in ms (default: `500`).
+  - `backoff` — `'exponential'` (default) or `'fixed'`.
+  - `statusCodes` — HTTP status codes that trigger a retry (default:
+    `[429, 500, 502, 503, 504]`).
+  - Each retry re-signs with a **fresh nonce and timestamp** — replay protection
+    is never weakened by retries.
+
+- **Edge Runtime support** — new `@daxmadov/hmac-kit/edge` subpath export.
+  Uses `globalThis.crypto` (Web Crypto API) exclusively — no `node:crypto`.
+  Compatible with Cloudflare Workers, Deno, Vercel Edge Functions, Bun, and
+  Node.js 18+.
+  - `EdgeSignClient` — same API as `SignClient`; `sign()` is `async`.
+  - `EdgeSignatureVerifier` — same API as `SignatureVerifier`.
+  - `EdgeSignedHttpClient` — same API as `SignedHttpClient`, includes retry.
+  - Timing-safe comparison implemented via HMAC with a per-call random key
+    (Web Crypto has no `timingSafeEqual` equivalent).
+
+### Changed
+
+- `hashBody` now accepts an optional `algorithm` parameter (default: `'sha256'`).
+  When `signatureAlgorithm: 'sha512'` is configured, the body hash embedded in
+  the string-to-sign also uses SHA-512 for consistency.
+
+  > **Migration**: if you were explicitly passing `signatureAlgorithm: 'sha512'`
+  > in v0.1.0 (undocumented), the wire format has changed — both client and
+  > server must upgrade together.
+
+---
+
 ## [0.1.0] — 2026-05-04
 
 Initial public release.

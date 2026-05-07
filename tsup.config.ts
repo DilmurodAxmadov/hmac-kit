@@ -19,6 +19,7 @@ export default defineConfig({
     'adapters/express': 'src/adapters/express.ts',
     'adapters/nestjs': 'src/adapters/nestjs.ts',
     'adapters/fastify': 'src/adapters/fastify.ts',
+    'edge/index': 'src/edge/index.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,

@@ -195,7 +195,7 @@ export class SignatureVerifier {
     }
 
     // ─── 7. Body hash + 8. Signature compare ──────────────────────────
-    const bodyHashHex = hashBody(input.rawBody);
+    const bodyHashHex = hashBody(input.rawBody, this.#algorithm);
     const stringToSign = buildStringToSign({
       method: input.method,
       path: input.path,
@@ -258,7 +258,7 @@ export class SignatureVerifier {
     nonce: string;
     body: string | Buffer | undefined;
   }): void {
-    const bodyHashHex = hashBody(args.body);
+    const bodyHashHex = hashBody(args.body, this.#algorithm);
     const stringToSign = buildStringToSign({
       method: args.method,
       path: args.path,

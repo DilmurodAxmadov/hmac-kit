@@ -69,6 +69,19 @@ describe('SignClient', () => {
     expect(JSON.stringify(s)).not.toContain('TOPSECRET');
   });
 
+  it('produces 128-char signature with sha512', () => {
+    const s = new SignClient({ clientId: 'c', secret: 'k', signatureAlgorithm: 'sha512' });
+    const { payload } = s.sign({ method: 'GET', path: '/' });
+    expect(payload['x-signature']).toMatch(/^[0-9a-f]{128}$/);
+  });
+
+  it('sha512 and sha256 produce different signatures for same input', () => {
+    const input = { method: 'GET', path: '/x', timestamp: 1000, nonce: 'n' };
+    const s256 = new SignClient({ clientId: 'c', secret: 'k', signatureAlgorithm: 'sha256' });
+    const s512 = new SignClient({ clientId: 'c', secret: 'k', signatureAlgorithm: 'sha512' });
+    expect(s256.sign(input).payload['x-signature']).not.toEqual(s512.sign(input).payload['x-signature']);
+  });
+
   it('respects timestamp + nonce overrides for deterministic signing', () => {
     const s = new SignClient({ clientId: 'c', secret: 'k' });
     const a = s.sign({

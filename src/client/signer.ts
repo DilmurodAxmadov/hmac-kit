@@ -89,7 +89,7 @@ export class SignClient {
   sign(input: SignRequestInput): SignResult {
     const timestamp = input.timestamp ?? nowUnixSeconds();
     const nonce = input.nonce ?? generateNonce();
-    const bodyHashHex = hashBody(input.body);
+    const bodyHashHex = hashBody(input.body, this.algorithm);
     const stringToSign = buildStringToSign({
       method: input.method,
       path: input.path,

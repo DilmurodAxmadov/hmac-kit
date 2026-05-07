@@ -34,11 +34,13 @@ import type { SignatureAlgorithm } from './types.js';
  *      types and adapters.
  */
 
-/** Compute SHA-256 hash of body, hex-encoded. Used inside string-to-sign. */
-export function hashBody(body: string | Buffer | undefined): string {
-  // Empty body must produce a STABLE hash — empty string. Never `undefined`.
+/** Compute hash of body, hex-encoded. Algorithm matches the signing algorithm. */
+export function hashBody(
+  body: string | Buffer | undefined,
+  algorithm: SignatureAlgorithm = 'sha256',
+): string {
   const data = body ?? '';
-  return createHash('sha256').update(data).digest('hex');
+  return createHash(algorithm).update(data).digest('hex');
 }
 
 /**

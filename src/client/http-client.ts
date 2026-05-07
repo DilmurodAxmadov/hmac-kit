@@ -1,5 +1,23 @@
 import { SignClient, type SignClientConfig } from './signer.js';
 
+export interface RetryConfig {
+  /** Total number of attempts, including the first. Default: 1 (no retry). */
+  attempts: number;
+  /** Base delay between retries in ms. Default: 500. */
+  delayMs: number;
+  /** 'exponential' doubles the delay each retry; 'fixed' keeps it the same. Default: 'exponential'. */
+  backoff: 'fixed' | 'exponential';
+  /** HTTP status codes that trigger a retry. Default: [429, 500, 502, 503, 504]. */
+  statusCodes: number[];
+}
+
+const DEFAULT_RETRY: RetryConfig = {
+  attempts: 1,
+  delayMs: 500,
+  backoff: 'exponential',
+  statusCodes: [429, 500, 502, 503, 504],
+};
+
 export interface SignedHttpClientConfig extends SignClientConfig {
   baseUrl: string;
   /**
@@ -18,6 +36,11 @@ export interface SignedHttpClientConfig extends SignClientConfig {
    * `AbortController`, so it covers DNS + TCP + TLS + body read.
    */
   timeoutMs?: number;
+  /**
+   * Retry configuration. By default no retries are performed (attempts: 1).
+   * Each retry re-signs the request with a fresh nonce and timestamp.
+   */
+  retry?: Partial<RetryConfig>;
 }
 
 export interface SignedRequestOptions {
@@ -42,6 +65,7 @@ export class SignedHttpClient {
   readonly #defaultHeaders: Record<string, string>;
   readonly #fetch: typeof globalThis.fetch;
   readonly #defaultTimeoutMs: number;
+  readonly #retry: RetryConfig;
 
   constructor(config: SignedHttpClientConfig) {
     if (!config.baseUrl) throw new Error('SignedHttpClient: baseUrl required');
@@ -56,6 +80,7 @@ export class SignedHttpClient {
       );
     }
     this.#defaultTimeoutMs = config.timeoutMs ?? 30_000;
+    this.#retry = { ...DEFAULT_RETRY, ...config.retry };
   }
 
   /** Low-level signed fetch. Returns the standard Response object. */
@@ -74,42 +99,68 @@ export class SignedHttpClient {
     const queryString = buildQueryString(options.query);
     const fullPath = queryString ? `${path}?${queryString}` : path;
 
-    // 3. Sign. The signature covers method + path-with-query + body bytes.
-    const signed = this.#signer.sign({
-      method,
-      path: fullPath,
-      body: bodyString,
-    });
+    let lastError: unknown;
 
-    // 4. Compose headers. Sig header goes last to win any conflict.
-    const headers: Record<string, string> = {
-      ...this.#defaultHeaders,
-      ...(options.headers ?? {}),
-    };
-    if (bodyString && !headers['Content-Type'] && !headers['content-type']) {
-      headers['Content-Type'] = contentType;
-    }
-    headers[signed.headerName] = signed.headerValue;
+    for (let attempt = 0; attempt < this.#retry.attempts; attempt++) {
+      if (attempt > 0) {
+        const delay =
+          this.#retry.backoff === 'exponential'
+            ? this.#retry.delayMs * 2 ** (attempt - 1)
+            : this.#retry.delayMs;
+        await sleep(delay);
+      }
 
-    // 5. Compose abort signal. We respect external `options.signal` AND
-    //    add our own timeout. Whichever fires first wins.
-    const timeoutMs = options.timeoutMs ?? this.#defaultTimeoutMs;
-    const internalAbort = new AbortController();
-    const timer = setTimeout(() => internalAbort.abort(), timeoutMs);
-    const signal = options.signal
-      ? anySignal([options.signal, internalAbort.signal])
-      : internalAbort.signal;
-
-    try {
-      return await this.#fetch(`${this.#baseUrl}${fullPath}`, {
+      // 3. Sign fresh on every attempt — new nonce + timestamp each time.
+      const signed = this.#signer.sign({
         method,
-        headers,
-        body: bodyString || undefined,
-        signal,
+        path: fullPath,
+        body: bodyString,
       });
-    } finally {
-      clearTimeout(timer);
+
+      // 4. Compose headers. Sig header goes last to win any conflict.
+      const headers: Record<string, string> = {
+        ...this.#defaultHeaders,
+        ...(options.headers ?? {}),
+      };
+      if (bodyString && !headers['Content-Type'] && !headers['content-type']) {
+        headers['Content-Type'] = contentType;
+      }
+      headers[signed.headerName] = signed.headerValue;
+
+      // 5. Compose abort signal. We respect external `options.signal` AND
+      //    add our own timeout. Whichever fires first wins.
+      const timeoutMs = options.timeoutMs ?? this.#defaultTimeoutMs;
+      const internalAbort = new AbortController();
+      const timer = setTimeout(() => internalAbort.abort(), timeoutMs);
+      const signal = options.signal
+        ? anySignal([options.signal, internalAbort.signal])
+        : internalAbort.signal;
+
+      try {
+        const response = await this.#fetch(`${this.#baseUrl}${fullPath}`, {
+          method,
+          headers,
+          body: bodyString || undefined,
+          signal,
+        });
+
+        const isLast = attempt === this.#retry.attempts - 1;
+        if (!isLast && this.#retry.statusCodes.includes(response.status)) {
+          response.body?.cancel();
+          lastError = new Error(`HTTP ${response.status}`);
+          continue;
+        }
+
+        return response;
+      } catch (err) {
+        lastError = err;
+        if (attempt === this.#retry.attempts - 1) throw err;
+      } finally {
+        clearTimeout(timer);
+      }
     }
+
+    throw lastError;
   }
 
   get(path: string, options?: SignedRequestOptions): Promise<Response> {
@@ -180,6 +231,10 @@ function buildQueryString(
     params.append(k, String(v));
   }
   return params.toString();
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /** Combine multiple AbortSignals into one. Polyfill of `AbortSignal.any`. */

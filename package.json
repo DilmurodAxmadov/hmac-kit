@@ -1,6 +1,6 @@
 {
   "name": "@daxmadov/hmac-kit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Framework-agnostic HMAC-SHA256 request signing for server-to-server authentication. Includes client signer, server verifier, nonce stores (memory/Redis), and Express/NestJS/Fastify adapters.",
   "keywords": [
     "hmac",
@@ -65,6 +65,11 @@
       "types": "./dist/adapters/fastify.d.ts",
       "import": "./dist/adapters/fastify.js",
       "require": "./dist/adapters/fastify.cjs"
+    },
+    "./edge": {
+      "types": "./dist/edge/index.d.ts",
+      "import": "./dist/edge/index.js",
+      "require": "./dist/edge/index.cjs"
     },
     "./package.json": "./package.json"
   },
