@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-05-18
+
+### Fixed
+
+- **Replay protection race condition (security)** — `SignatureVerifier` and
+  `EdgeSignatureVerifier` now bind their replay decision through an atomic
+  compare-and-set on the nonce store, closing a TOCTOU window between the
+  early `exists()` heuristic and the final `set()`. Previously, two
+  concurrent identical signed requests could both observe `exists() === false`
+  and both pass verification — a classic double-spend risk for payment-like
+  APIs. The loser of the CAS race now receives `ReplayAttackError`.
+
+### Added
+
+- **`NonceStore.setIfAbsent(key, ttlSeconds): Promise<boolean>`** — new
+  optional method on the store interface. Returns `true` if the entry was
+  newly inserted, `false` if a live entry already existed. Both
+  `MemoryNonceStore` and `RedisNonceStore` implement it; the verifier
+  prefers it when available and gracefully falls back to `exists`+`set`
+  for third-party stores that do not implement it (with the documented
+  weaker semantics).
+
+### Notes
+
+- Fully backward compatible. No API changes for users of `SignClient`,
+  `SignedHttpClient`, `SignatureVerifier`, or the framework adapters.
+- Third-party `NonceStore` implementations continue to work unchanged;
+  they should add `setIfAbsent` for race-safe replay protection.
+
 ## [0.2.0] — 2026-05-07
 
 ### Added

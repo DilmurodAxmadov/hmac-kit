@@ -174,6 +174,37 @@ describe('SignatureVerifier rejection paths', () => {
     ).rejects.toBeInstanceOf(ReplayAttackError);
   });
 
+  it('rejects concurrent duplicate requests — exactly one passes (atomic CAS)', async () => {
+    const signer = new SignClient({ clientId: CLIENT_ID, secret: SECRET });
+    const { headerValue } = signer.sign({
+      method: 'POST',
+      path: '/api/concurrent',
+      body: '{"x":1}',
+    });
+    // Fire many identical signed requests in parallel. Without atomic
+    // CAS in the nonce store this test fails because multiple verifies
+    // observe `exists() === false` and all win signature verification.
+    const attempts = await Promise.allSettled(
+      Array.from({ length: 20 }, () =>
+        verifier.verify({
+          authHeader: headerValue,
+          method: 'POST',
+          path: '/api/concurrent',
+          rawBody: '{"x":1}',
+        }),
+      ),
+    );
+    const fulfilled = attempts.filter((r) => r.status === 'fulfilled');
+    const rejected = attempts.filter(
+      (r): r is PromiseRejectedResult => r.status === 'rejected',
+    );
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(19);
+    for (const r of rejected) {
+      expect(r.reason).toBeInstanceOf(ReplayAttackError);
+    }
+  });
+
   it('throws UnknownClientError when secret resolver returns null', async () => {
     const signer = new SignClient({
       clientId: 'unknown_svc',
@@ -284,6 +315,41 @@ describe('SignatureVerifier — sha512 algorithm', () => {
       verifier.verify({ authHeader: headerValue, method: 'GET', path: '/' }),
     ).rejects.toBeInstanceOf(InvalidSignatureError);
     store.close();
+  });
+});
+
+describe('SignatureVerifier — legacy NonceStore (no setIfAbsent)', () => {
+  // A third-party store that only implements the v0.2.0 surface.
+  // Verifier must keep working against it, just with the weaker
+  // (race-admitting) replay semantics documented on the interface.
+  class LegacyStore {
+    readonly map = new Map<string, number>();
+    async exists(key: string): Promise<boolean> {
+      const exp = this.map.get(key);
+      if (exp === undefined) return false;
+      if (exp <= Date.now()) {
+        this.map.delete(key);
+        return false;
+      }
+      return true;
+    }
+    async set(key: string, ttlSeconds: number): Promise<void> {
+      this.map.set(key, Date.now() + ttlSeconds * 1000);
+    }
+  }
+
+  it('still detects sequential replays via exists()', async () => {
+    const legacy = new LegacyStore();
+    const verifier = new SignatureVerifier({
+      getSecret: async (id) => (id === CLIENT_ID ? SECRET : null),
+      nonceStore: legacy,
+    });
+    const signer = new SignClient({ clientId: CLIENT_ID, secret: SECRET });
+    const { headerValue } = signer.sign({ method: 'GET', path: '/' });
+    await verifier.verify({ authHeader: headerValue, method: 'GET', path: '/' });
+    await expect(
+      verifier.verify({ authHeader: headerValue, method: 'GET', path: '/' }),
+    ).rejects.toBeInstanceOf(ReplayAttackError);
   });
 });
 

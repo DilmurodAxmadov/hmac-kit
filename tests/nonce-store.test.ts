@@ -52,6 +52,40 @@ describe('MemoryNonceStore', () => {
     s.close();
     expect(s.size()).toBe(0);
   });
+
+  it('setIfAbsent inserts a new key and returns true', async () => {
+    const s = new MemoryNonceStore({ sweepIntervalMs: 0 });
+    stores.push(s);
+    expect(await s.setIfAbsent('k', 60)).toBe(true);
+    expect(await s.exists('k')).toBe(true);
+  });
+
+  it('setIfAbsent returns false when a live entry exists', async () => {
+    const s = new MemoryNonceStore({ sweepIntervalMs: 0 });
+    stores.push(s);
+    expect(await s.setIfAbsent('k', 60)).toBe(true);
+    expect(await s.setIfAbsent('k', 60)).toBe(false);
+  });
+
+  it('setIfAbsent overwrites an expired entry and returns true', async () => {
+    const s = new MemoryNonceStore({ sweepIntervalMs: 0 });
+    stores.push(s);
+    await s.set('k', -1); // already expired
+    expect(await s.setIfAbsent('k', 60)).toBe(true);
+    expect(await s.exists('k')).toBe(true);
+  });
+
+  it('setIfAbsent is atomic across concurrent callers', async () => {
+    const s = new MemoryNonceStore({ sweepIntervalMs: 0 });
+    stores.push(s);
+    // Fire many concurrent setIfAbsent calls for the same key.
+    // Exactly one must win.
+    const results = await Promise.all(
+      Array.from({ length: 50 }, () => s.setIfAbsent('race', 60)),
+    );
+    const winners = results.filter(Boolean).length;
+    expect(winners).toBe(1);
+  });
 });
 
 describe('RedisNonceStore', () => {
@@ -126,5 +160,20 @@ describe('RedisNonceStore', () => {
     await s.set('k', 60);
     const setCall = client.calls.find((c) => c.name === 'set');
     expect(setCall?.args[4]).toBeUndefined();
+  });
+
+  it('setIfAbsent returns true for a new key, false for a duplicate', async () => {
+    const client = makeClient();
+    const s = new RedisNonceStore({ client });
+    expect(await s.setIfAbsent('k', 60)).toBe(true);
+    expect(await s.setIfAbsent('k', 60)).toBe(false);
+  });
+
+  it('setIfAbsent always uses SET NX EX regardless of atomic option', async () => {
+    const client = makeClient();
+    const s = new RedisNonceStore({ client, atomic: false });
+    await s.setIfAbsent('k', 60);
+    const setCall = client.calls.find((c) => c.name === 'set');
+    expect(setCall?.args[4]).toBe('NX');
   });
 });

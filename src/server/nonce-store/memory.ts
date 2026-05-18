@@ -59,6 +59,26 @@ export class MemoryNonceStore implements NonceStore {
   }
 
   async set(key: string, ttlSeconds: number): Promise<void> {
+    this.#insert(key, ttlSeconds);
+  }
+
+  /**
+   * Atomic check-and-insert. No `await` between the read and the write —
+   * so on a single event loop, no other caller can interleave between
+   * `Map.get` and `Map.set` here. This is what gives us race-safe replay
+   * protection. Returns `true` if the key was newly inserted, `false` if
+   * a non-expired entry already existed.
+   */
+  async setIfAbsent(key: string, ttlSeconds: number): Promise<boolean> {
+    const existing = this.#map.get(key);
+    if (existing !== undefined && existing > Date.now()) {
+      return false;
+    }
+    this.#insert(key, ttlSeconds);
+    return true;
+  }
+
+  #insert(key: string, ttlSeconds: number): void {
     if (this.#map.size >= this.#maxEntries) {
       // Drop the oldest single entry (Map preserves insertion order).
       const oldest = this.#map.keys().next().value;

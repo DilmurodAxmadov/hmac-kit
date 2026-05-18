@@ -66,16 +66,19 @@ export interface VerifierConfig {
  *   6. Secret lookup         → `UnknownClientError`
  *   7. Body hash compute     → (continues)
  *   8. Signature compare     → `InvalidSignatureError` (constant time)
- *   9. Nonce uniqueness STORE
+ *   9. Nonce uniqueness STORE → `ReplayAttackError` if a race-loser
  *
  * Why this order:
  *   - Cheap, observable-anyway checks first (everyone can see the headers).
  *   - Secret lookup AFTER timestamp+nonce — there's no point hitting the
  *     DB for a stale request, and it limits a flood of unknown-client
  *     lookups during noise.
- *   - Nonce STORE is the LAST step. Recording a nonce before signature
- *     verification would let attackers "burn" valid future nonces by
- *     replaying with a wrong signature.
+ *   - Nonce STORE is the LAST step AND is the *binding* replay check.
+ *     Step 5's `exists()` is a fast-path heuristic; step 9 uses
+ *     `setIfAbsent` (atomic CAS) so two concurrent requests that both
+ *     pass step 5 cannot both pass step 9. Recording a nonce before
+ *     signature verification would let attackers "burn" valid future
+ *     nonces by replaying with a wrong signature.
  *   - Body hash and signature are computed even on unknown clients — but
  *     with a dummy secret — to avoid timing leak that distinguishes
  *     "unknown client" from "wrong signature". (We DO throw a different
@@ -220,20 +223,33 @@ export class SignatureVerifier {
       throw new InvalidSignatureError();
     }
 
-    // ─── 9. Record nonce ───────────────────────────────────────────────
+    // ─── 9. Record nonce (binding replay check) ────────────────────────
     // Use 2× window as TTL: any record older than that can no longer
     // be used to replay because the timestamp check would reject first.
+    // Prefer `setIfAbsent` — atomic CAS that closes the TOCTOU window
+    // between step 5's `exists()` and this write. A `false` return means
+    // a concurrent duplicate raced us past step 5; reject it as a replay.
+    const fullNonceKey = nonceKey(clientId, nonce);
+    let lostRace = false;
     try {
-      await this.#nonceStore.set(
-        nonceKey(clientId, nonce),
-        this.#window * 2,
-      );
+      if (typeof this.#nonceStore.setIfAbsent === 'function') {
+        lostRace = !(await this.#nonceStore.setIfAbsent(
+          fullNonceKey,
+          this.#window * 2,
+        ));
+      } else {
+        await this.#nonceStore.set(fullNonceKey, this.#window * 2);
+      }
     } catch (err) {
       this.#log('error', 'auth.nonce_store_write_failed', {
         clientId,
         cause: errMsg(err),
       });
       throw new InternalAuthError('nonce store write failed');
+    }
+    if (lostRace) {
+      this.#log('warn', 'auth.replay_attack_race', { clientId });
+      throw new ReplayAttackError();
     }
 
     this.#log('debug', 'auth.success', { clientId });

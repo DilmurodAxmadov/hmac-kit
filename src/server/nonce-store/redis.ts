@@ -69,14 +69,29 @@ export class RedisNonceStore implements NonceStore {
   async set(key: string, ttlSeconds: number): Promise<void> {
     const fullKey = this.#prefix + key;
     if (this.#atomic) {
-      // `SET NX EX` — succeeds only if the key did not exist. Returning
-      // `null` means a concurrent request already inserted it; we treat
-      // that as success here because the verifier's pre-check already
-      // determined the request to be legitimate. The replay-detection
-      // happens in `exists`, not in `set`.
+      // `SET NX EX` — succeeds only if the key did not exist. We discard
+      // the return value here; replay detection on this path lives in
+      // the verifier's `exists()` pre-check. For the race-safe path,
+      // see `setIfAbsent` below.
       await this.#client.set(fullKey, '1', 'EX', ttlSeconds, 'NX');
     } else {
       await this.#client.set(fullKey, '1', 'EX', ttlSeconds);
     }
+  }
+
+  /**
+   * `SET NX EX` round-trip. Returns `true` if the key was newly stored,
+   * `false` if a concurrent request already stored it. Always atomic;
+   * the `atomic` option only affects the legacy `set()` method.
+   */
+  async setIfAbsent(key: string, ttlSeconds: number): Promise<boolean> {
+    const reply = await this.#client.set(
+      this.#prefix + key,
+      '1',
+      'EX',
+      ttlSeconds,
+      'NX',
+    );
+    return reply === 'OK';
   }
 }

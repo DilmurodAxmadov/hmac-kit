@@ -25,14 +25,27 @@ export interface NonceStore {
    * Record the key with the given TTL (seconds). Subsequent `exists` calls
    * within the TTL must return `true`.
    *
-   * NOTE: Callers must perform a check-then-set. Atomic CAS would be safer
-   * against truly concurrent identical requests, but the cost (Redis
-   * `SET NX EX` round-trip per request) is high. The verifier reads then
-   * writes; the worst case race admits two duplicate requests in the same
-   * millisecond — both with the SAME signature — which is functionally
-   * equivalent to the single legitimate request being processed.
-   * Implementations CAN provide stronger guarantees (see `RedisNonceStore`
-   * for an `SETNX`-based variant if desired).
+   * NOTE: This primitive is NOT race-safe on its own. Two concurrent
+   * requests with the same nonce that both observe `exists() === false`
+   * will both reach `set()` and both succeed. Prefer `setIfAbsent` for
+   * binding replay decisions — the verifier uses it when available.
    */
   set(key: string, ttlSeconds: number): Promise<void>;
+
+  /**
+   * Atomically record the key only if it is not already present.
+   * Returns `true` if the entry was newly inserted, `false` if a live
+   * entry already existed (i.e. a concurrent duplicate / replay).
+   *
+   * This is the SAFE primitive used by the verifier to bind its replay
+   * decision: even if two identical requests race past the early
+   * `exists()` heuristic, only one of them can win the `setIfAbsent`
+   * race; the loser is treated as a replay.
+   *
+   * Optional for backward compatibility. Implementations SHOULD provide
+   * it. Both `MemoryNonceStore` and `RedisNonceStore` do. Third-party
+   * stores without this method fall back to the weaker `exists`+`set`
+   * path, which admits a small race window under concurrency.
+   */
+  setIfAbsent?(key: string, ttlSeconds: number): Promise<boolean>;
 }

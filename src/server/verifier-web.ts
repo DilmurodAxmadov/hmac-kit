@@ -150,11 +150,26 @@ export class EdgeSignatureVerifier {
       throw new InvalidSignatureError();
     }
 
+    // Atomic CAS via `setIfAbsent` when available; closes the TOCTOU
+    // window between the earlier `exists()` heuristic and this write.
+    const fullNonceKey = nonceKey(clientId, nonce);
+    let lostRace = false;
     try {
-      await this.#nonceStore.set(nonceKey(clientId, nonce), this.#window * 2);
+      if (typeof this.#nonceStore.setIfAbsent === 'function') {
+        lostRace = !(await this.#nonceStore.setIfAbsent(
+          fullNonceKey,
+          this.#window * 2,
+        ));
+      } else {
+        await this.#nonceStore.set(fullNonceKey, this.#window * 2);
+      }
     } catch (err) {
       this.#log('error', 'auth.nonce_store_write_failed', { clientId, cause: errMsg(err) });
       throw new InternalAuthError('nonce store write failed');
+    }
+    if (lostRace) {
+      this.#log('warn', 'auth.replay_attack_race', { clientId });
+      throw new ReplayAttackError();
     }
 
     this.#log('debug', 'auth.success', { clientId });
